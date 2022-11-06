@@ -4,69 +4,68 @@ import (
 	"flag"
 	"fmt"
 	"git.imooc.com/coding-535/common"
-	"route/domain/repository"
-	"path/filepath" 
-    
+	"github.com/liuzhuguan/route/domain/repository"
+	"path/filepath"
+
 	//"github.com/afex/hystrix-go/hystrix"
 	"github.com/asim/go-micro/plugins/registry/consul/v3"
-	service2 "route/domain/service"
 	ratelimit "github.com/asim/go-micro/plugins/wrapper/ratelimiter/uber/v3"
 	opentracing2 "github.com/asim/go-micro/plugins/wrapper/trace/opentracing/v3"
 	"github.com/asim/go-micro/v3"
 	"github.com/asim/go-micro/v3/registry"
-    "github.com/asim/go-micro/v3/server"
+	"github.com/asim/go-micro/v3/server"
 	"github.com/jinzhu/gorm"
 	_ "github.com/jinzhu/gorm/dialects/mysql"
+	service2 "github.com/liuzhuguan/route/domain/service"
+	"github.com/liuzhuguan/route/handler"
+	"github.com/liuzhuguan/route/proto/route"
 	"github.com/opentracing/opentracing-go"
-	"route/handler"
-	//hystrix2 "route/plugin/hystrix"
-	"strconv"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
-	route "route/proto/route"
-
+	//hystrix2 "route/plugin/hystrix"
+	"strconv"
 )
 
 var (
-    //服务地址
-	hostIp = "192.168.0.108"
-    //服务地址
-    serviceHost = hostIp
-    //服务端口
-	servicePort = "8081"
-     
+	//服务地址
+	hostIp = "192.168.0.106"
+	//服务地址
+	serviceHost = hostIp
+	//服务端口
+	servicePort = "8089"
+
 	//注册中心配置
-	consulHost  = hostIp
+	consulHost       = hostIp
 	consulPort int64 = 8500
 	//链路追踪
 	tracerHost = hostIp
 	tracerPort = 6831
-	//熔断端口，每个服务不能重复 
+	//熔断端口，每个服务不能重复
 	//hystrixPort = 9092
 	//监控端口，每个服务不能重复
-	prometheusPort = 9192
+	prometheusPort = 9199
 )
 
 func main() {
-    //需要本地启动，mysql，consul中间件服务
+	//需要本地启动，mysql，consul中间件服务
 	//1.注册中心
-	consul:=consul.NewRegistry(func(options *registry.Options) {
+	consul := consul.NewRegistry(func(options *registry.Options) {
 		options.Addrs = []string{
-			consulHost+":"+strconv.FormatInt(consulPort,10),
+			consulHost + ":" + strconv.FormatInt(consulPort, 10),
 		}
 	})
 	//2.配置中心，存放经常变动的变量
-	consulConfig,err := common.GetConsulConfig(consulHost,consulPort,"/micro/config")
-	if err !=nil {
+	consulConfig, err := common.GetConsulConfig(consulHost, consulPort, "/micro/config")
+	if err != nil {
 		common.Error(err)
 	}
 	//3.使用配置中心连接 mysql
-	mysqlInfo := common.GetMysqlFromConsul(consulConfig,"mysql")
+	mysqlInfo := common.GetMysqlFromConsul(consulConfig, "mysql")
 	//初始化数据库
-	db,err := gorm.Open("mysql",mysqlInfo.User+":"+mysqlInfo.Pwd+"@("+mysqlInfo.Host+":3306)/"+mysqlInfo.Database+"?charset=utf8&parseTime=True&loc=Local")
-	if err !=nil {
-        //命令行输出下，方便查看错误
+	db, err := gorm.Open("mysql", mysqlInfo.User+":"+mysqlInfo.Pwd+"@("+mysqlInfo.Host+":3306)/"+mysqlInfo.Database+"?charset=utf8&parseTime=True&loc=Local")
+	if err != nil {
+		//命令行输出下，方便查看错误
 		fmt.Println(err)
 		common.Fatal(err)
 	}
@@ -75,8 +74,8 @@ func main() {
 	db.SingularTable(true)
 
 	//4.添加链路追踪
-	t,io,err := common.NewTracer("go.micro.service.route",tracerHost+":"+strconv.Itoa(tracerPort))
-	if err !=nil {
+	t, io, err := common.NewTracer("go.micro.service.route", tracerHost+":"+strconv.Itoa(tracerPort))
+	if err != nil {
 		common.Error(err)
 	}
 	defer io.Close()
@@ -104,7 +103,6 @@ func main() {
 
 	//5.添加监控
 	common.PrometheusBoot(prometheusPort)
-
 
 	//下载kubectl：https://kubernetes.io/docs/tasks/tools/#tabset-2
 	//macos：
@@ -148,7 +146,7 @@ func main() {
 	service := micro.NewService(
 		//自定义服务地址，且必须写在其它参数前面
 		micro.Server(server.NewServer(func(options *server.Options) {
-			options.Advertise =serviceHost+":"+servicePort
+			options.Advertise = serviceHost + ":" + servicePort
 		})),
 		micro.Name("go.micro.service.route"),
 		micro.Version("latest"),
@@ -164,23 +162,22 @@ func main() {
 		//添加限流
 		micro.WrapHandler(ratelimit.NewHandlerWrapper(1000)),
 	)
- 
+
 	service.Init()
 
 	//只能执行一遍
-	//err = repository.NewRouteRepository(db).InitTable()
-	//if err != nil {
-	//	common.Fatal(err)
-	//}
+	err = repository.NewRouteRepository(db).InitTable()
+	if err != nil {
+		common.Fatal(err)
+	}
 
 	// 注册句柄，可以快速操作已开发的服务
-	routeDataService:=service2.NewRouteDataService(repository.NewRouteRepository(db),clientset)
-	route.RegisterRouteHandler(service.Server(), &handler.RouteHandler{ RouteDataService:routeDataService})
+	routeDataService := service2.NewRouteDataService(repository.NewRouteRepository(db), clientset)
+	route.RegisterRouteHandler(service.Server(), &handler.RouteHandler{RouteDataService: routeDataService})
 
 	// 启动服务
 	if err := service.Run(); err != nil {
-        //输出启动失败信息
+		//输出启动失败信息
 		common.Fatal(err)
 	}
 }
-
